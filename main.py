@@ -3,7 +3,10 @@ from dotenv import load_dotenv
 from google import genai
 import sys
 from google.genai import types
-
+from functions.get_files_info import get_files_info
+from functions.get_file_content import get_file_content
+from functions.run_python import run_python_file
+from functions.write_file import write_file
 
 load_dotenv()
 api_key = os.environ.get("GEMINI_API_KEY")
@@ -78,6 +81,46 @@ available_functions = types.Tool(
     ]
 )
 
+def call_function(function_call_part, verbose=False):
+    if verbose == True:
+      print(f"Calling function: {function_call_part.name}({function_call_part.args})")
+    else:
+      print(f" - Calling function: {function_call_part.name}")
+
+    function_map = {
+       "get_files_info": get_files_info,
+       "get_file_content": get_file_content,
+       "run_python_file": run_python_file,
+       "write_file": write_file
+    }
+   
+    if function_call_part.name in function_map:
+        function = function_map[function_call_part.name]
+        args = dict(function_call_part.args)  # copy the dict, don't mutate the original
+        args["working_directory"] = "./calculator"
+        result = function(**args)
+
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                    name=function_call_part.name,
+                    response={"result": result},
+                )
+            ],
+        )
+
+    else:
+        return types.Content(
+            role="tool",
+            parts=[
+                types.Part.from_function_response(
+                name=function_call_part.name,
+                response={"error": f"Unknown function: {function_call_part.name}"},
+        )
+    ],
+)
+    
 def main():
    system_prompt = """
 You are a helpful AI coding agent.
@@ -121,10 +164,21 @@ All paths you provide should be relative to the working directory. You do not ne
 
 
    if response.function_calls:
-      for call in response.function_calls:
-         print(f"Calling function: {call.name}({call.args})")
+        for call in response.function_calls:
+            function_call_result = call_function(call, verbose=verbose)
+            # Try to access the response directly
+            try:
+                result = function_call_result.parts[0].function_response.response
+            except AttributeError:
+                raise Exception("Fatal Error: Missing 'response' attribute in function tool result")
+            if verbose:
+                print(f"-> {result}")
+            return result
+        
+        
    else:
       print(response.text)
 
 if __name__ == "__main__":
     main()
+
