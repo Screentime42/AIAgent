@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from google import genai
 import sys
 from google.genai import types
+from google.genai.types import Content
 from functions.get_files_info import get_files_info
 from functions.get_file_content import get_file_content
 from functions.run_python import run_python_file
@@ -81,22 +82,22 @@ available_functions = types.Tool(
     ]
 )
 
+function_map = {
+    "get_files_info": get_files_info,
+    "get_file_content": get_file_content,
+    "run_python_file": run_python_file,
+    "write_file": write_file
+}
+
 def call_function(function_call_part, verbose=False):
     if verbose == True:
       print(f"Calling function: {function_call_part.name}({function_call_part.args})")
     else:
       print(f" - Calling function: {function_call_part.name}")
 
-    function_map = {
-       "get_files_info": get_files_info,
-       "get_file_content": get_file_content,
-       "run_python_file": run_python_file,
-       "write_file": write_file
-    }
-   
     if function_call_part.name in function_map:
         function = function_map[function_call_part.name]
-        args = dict(function_call_part.args)  # copy the dict, don't mutate the original
+        args = dict(function_call_part.args)  
         args["working_directory"] = "./calculator"
         result = function(**args)
 
@@ -122,7 +123,7 @@ def call_function(function_call_part, verbose=False):
 )
     
 def main():
-   system_prompt = """
+    system_prompt = """
 You are a helpful AI coding agent.
 
 When a user asks a question or makes a request, make a function call plan. You can perform the following operations:
@@ -135,16 +136,16 @@ When a user asks a question or makes a request, make a function call plan. You c
 All paths you provide should be relative to the working directory. You do not need to specify the working directory in your function calls as it is automatically injected for security reasons.
 """
 
-   verbose = '--verbose' in sys.argv
+    verbose = '--verbose' in sys.argv
    
-   prompt_parts = [arg for arg in sys.argv[1:] if arg != '--verbose']
-   prompt = ' '.join(prompt_parts)
+    prompt_parts = [arg for arg in sys.argv[1:] if arg != '--verbose']
+    prompt = ' '.join(prompt_parts)
 
-   messages = [
-    types.Content(role="user", parts=[types.Part(text=prompt)]),
+    messages = [
+        types.Content(role="user", parts=[types.Part(text=prompt)]),
    ]
 
-   response = client.models.generate_content(
+    response = client.models.generate_content(
       model='gemini-2.0-flash-001', 
       contents=messages,
       config=types.GenerateContentConfig(
@@ -153,17 +154,17 @@ All paths you provide should be relative to the working directory. You do not ne
          )
    )
 
-   if len(sys.argv) < 2:
+    if len(sys.argv) < 2:
       print("Error: No prompt provided")
       sys.exit(1)
 
-   if verbose:
+    if verbose:
       print(f'User prompt: "{prompt}"')
       print(f"Prompt tokens: {response.usage_metadata.prompt_token_count}")
       print(f"Response tokens: {response.usage_metadata.candidates_token_count}")
 
 
-   if response.function_calls:
+    if response.function_calls:
         for call in response.function_calls:
             function_call_result = call_function(call, verbose=verbose)
             # Try to access the response directly
@@ -173,11 +174,36 @@ All paths you provide should be relative to the working directory. You do not ne
                 raise Exception("Fatal Error: Missing 'response' attribute in function tool result")
             if verbose:
                 print(f"-> {result}")
-            return result
+            
         
         
-   else:
+    else:
       print(response.text)
+
+    
+    MAX_ITERATIONS = 20
+    for i in range(MAX_ITERATIONS):
+        response = client.models.generate_content(
+            contents=messages, 
+            model='gemini-2.0-flash-001',
+            config=types.GenerateContentConfig(tools=[available_functions])
+        )
+        did_tool = False
+        for candidate in response.candidates:
+            messages.append(candidate.content)
+            for part in candidate.content.parts:
+                if (hasattr(part, "function_call") and part.function_call is not None):
+                    function_call_result = call_function(part.function_call, verbose=verbose)
+                    messages.append(function_call_result)
+                    did_tool = True
+                elif hasattr(part, "text") and part.text.strip():
+                    print(part.text)
+                    
+        if not did_tool:
+            break
+        else:
+            print(response.text)
+            
 
 if __name__ == "__main__":
     main()
